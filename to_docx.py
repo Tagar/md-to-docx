@@ -4,6 +4,11 @@
 Usage:
     to_docx.py INPUT.txt [OUTPUT.docx] [--title "Document title"]
 
+Header block:
+    - First non-empty line                                      Title (Word Title style)
+    - Second non-empty plain-text line (short, Title-Case-ish)  Subtitle (Word Subtitle style)
+    - Subsequent lines                                          body
+
 Markdown features supported:
     Block-level:
     - `# H1`, `## H2`, `### H3`, `#### H4`                     explicit headings
@@ -188,6 +193,31 @@ def is_table_separator(line: str) -> bool:
     return bool(re.match(r"^\|?[\s\-:|]+\|?$", stripped)) and "-" in stripped and "|" in stripped
 
 
+def is_subtitle_candidate(line: str) -> bool:
+    """A plain-text line that should render as Word Subtitle style.
+
+    Used only for the position immediately after the document title — the
+    first non-empty, non-header line at the top of the file. Must look like
+    a title/subtitle: short, starts uppercase, no end punctuation, no
+    block-level markers, <=10 words.
+    """
+    stripped = line.strip()
+    if not stripped or len(stripped) > 80:
+        return False
+    if stripped[-1] in ".!?;,:":
+        return False
+    if len(stripped.split()) > 10:
+        return False
+    if not stripped[0].isupper():
+        return False
+    if (is_markdown_heading(line) or is_divider(line) or is_bullet(line)
+            or is_numbered_list_item(line) or is_kv_label(line)
+            or is_blockquote(line) or is_code_fence(line) or is_table_row(line)
+            or is_all_caps_heading(line) or is_numbered_heading(line)):
+        return False
+    return True
+
+
 def parse_table_row(line: str) -> list[str]:
     # Strip leading/trailing pipes, split on inner pipes, strip each cell
     inner = line.strip()
@@ -239,6 +269,14 @@ def _add_code_block(doc, code: str) -> None:
         _style_code_run(run)
 
 
+def _add_subtitle(doc, text: str) -> None:
+    try:
+        p = doc.add_paragraph(style="Subtitle")
+    except KeyError:
+        p = doc.add_paragraph()
+    add_inline_runs(p, text)
+
+
 # ----- main conversion loop -----
 
 def convert(src: Path, dst: Path, title: str) -> None:
@@ -249,6 +287,23 @@ def convert(src: Path, dst: Path, title: str) -> None:
 
     lines = src.read_text().splitlines()
     i = 0
+
+    # Header block: skip the first non-empty line if it matches the title
+    # (default_title uses line 1, so otherwise it'd render twice).
+    while i < len(lines) and not lines[i].strip():
+        i += 1
+    if i < len(lines) and lines[i].strip() == title:
+        i += 1
+
+    # If the next non-empty line is a subtitle candidate (short, plain text,
+    # no end punctuation, Title-Case-ish), render it with the Subtitle style.
+    j = i
+    while j < len(lines) and not lines[j].strip():
+        j += 1
+    if j < len(lines) and is_subtitle_candidate(lines[j]):
+        _add_subtitle(doc, lines[j].strip())
+        i = j + 1
+
     while i < len(lines):
         line = lines[i]
 

@@ -138,6 +138,38 @@ class TestClassifiers:
         assert to_docx.parse_table_row("|x|y|") == ["x", "y"]
         assert to_docx.parse_table_row("| leading | trailing spaces |") == ["leading", "trailing spaces"]
 
+    @pytest.mark.parametrize("line,expected", [
+        # Good subtitle candidates
+        ("Elasticity Engagement", True),
+        ("Demand Forecasting Engagement", True),
+        ("Q1 2026 Roadmap", True),
+        # Rejected: ends with sentence punctuation
+        ("This is a body sentence.", False),
+        ("Final question?", False),
+        ("Ending with exclaim!", False),
+        ("Trailing colon:", False),
+        # Rejected: too long
+        ("Draft scoping document | Databricks FDE | Version v0.6 | 22 Apr 2026", False),
+        # Rejected: too many words
+        ("One two three four five six seven eight nine ten eleven words", False),
+        # Rejected: lowercase start
+        ("lowercase first letter", False),
+        # Rejected: block markers
+        ("## Not a subtitle", False),
+        ("- bullet line", False),
+        ("1. numbered item that looks like subtitle", False),
+        ("| cell | table |", False),
+        ("> quoted line", False),
+        ("```", False),
+        ("--------", False),
+        ("ALL CAPS LINE", False),
+        ("Status: Active", False),
+        # Edge
+        ("", False),
+    ])
+    def test_is_subtitle_candidate(self, line, expected):
+        assert to_docx.is_subtitle_candidate(line) is expected
+
 
 # ============================================================
 # HTML stripping
@@ -173,6 +205,51 @@ class TestIntegration:
         doc = _convert_str("hello", tmp_path, title="My Document")
         assert doc.paragraphs[0].text == "My Document"
         assert doc.paragraphs[0].style.name == "Title"
+
+    def test_title_line_not_duplicated_in_body(self, tmp_path):
+        """When the first line of the file is also the title, it must not render twice."""
+        src = "My Document\n\nBody content here.\n"
+        doc = _convert_str(src, tmp_path, title="My Document")
+        # Only the Title paragraph should have this text — no duplicate body paragraph
+        matches = [p for p in doc.paragraphs if p.text == "My Document"]
+        assert len(matches) == 1
+        assert matches[0].style.name == "Title"
+
+    def test_subtitle_from_header_block(self, tmp_path):
+        """Second non-empty plain-text line after title renders as Subtitle style."""
+        src = (
+            "Dick's Sporting Goods (DSG)\n"
+            "Elasticity Engagement\n"
+            "Draft scoping document | Databricks FDE | v0.6 | 22 Apr 2026\n"
+            "\n"
+            "Body paragraph begins here.\n"
+        )
+        doc = _convert_str(src, tmp_path, title="Dick's Sporting Goods (DSG)")
+        subtitles = [p for p in doc.paragraphs if p.style.name == "Subtitle"]
+        assert len(subtitles) == 1
+        assert subtitles[0].text == "Elasticity Engagement"
+        # The meta line should still appear as body (not duplicated, not eaten)
+        meta = [p for p in doc.paragraphs if "Draft scoping" in p.text]
+        assert len(meta) == 1
+        # And the body paragraph follows
+        assert any("Body paragraph begins here" in p.text for p in doc.paragraphs)
+
+    def test_no_subtitle_when_second_line_is_body_sentence(self, tmp_path):
+        """A normal body sentence on line 2 must NOT be consumed as subtitle."""
+        src = "Simple Title\n\nThis is a full body sentence.\n"
+        doc = _convert_str(src, tmp_path, title="Simple Title")
+        subtitles = [p for p in doc.paragraphs if p.style.name == "Subtitle"]
+        assert len(subtitles) == 0
+        assert any("full body sentence" in p.text for p in doc.paragraphs)
+
+    def test_no_subtitle_when_second_line_is_heading(self, tmp_path):
+        """An H2 on line 2 must NOT be consumed as subtitle."""
+        src = "My Doc\n\n## Section One\n\nBody.\n"
+        doc = _convert_str(src, tmp_path, title="My Doc")
+        subtitles = [p for p in doc.paragraphs if p.style.name == "Subtitle"]
+        assert len(subtitles) == 0
+        h2s = [p for p in doc.paragraphs if p.style.name == "Heading 2"]
+        assert len(h2s) == 1 and h2s[0].text == "Section One"
 
     def test_explicit_heading_levels(self, tmp_path):
         src = "# H1\n\n## H2\n\n### H3\n\n#### H4\n"
