@@ -1,0 +1,79 @@
+Project Scoping Example
+
+## Overview
+
+This is a **sample** input demonstrating every feature supported by `to_docx.py`. Use it as a reference for the syntax you can throw at the converter.
+
+The first non-empty line (above) becomes the document *title* unless you pass `--title`.
+
+## Headings
+
+# H1 via markdown
+## H2 via markdown
+### H3 via markdown
+#### H4 via markdown
+
+ALL CAPS BECOMES H1
+
+1. Short Title Case Becomes H2
+
+## Lists
+
+Numbered list:
+
+1. First item with **bold** and *italic*.
+2. Second item with `inline code` and a [link](https://example.com).
+3. Third item with ~~strikethrough~~.
+
+Bullets:
+
+- Top-level bullet
+- Another top-level
+  - Sub-bullet (indent two spaces)
+  - Another sub-bullet
+- Back to top level
+
+## Inline formatting
+
+Here is **bold**, __also bold__, *italic*, _also italic_, `code`, ~~strike~~, and a [hyperlink](https://anthropic.com).
+
+Inline formatting works in **headings**, list items, and table cells.
+
+Stray <span>html tags</span> get <!-- comments and all --> stripped.
+
+## Key-value labels
+
+Status: In progress
+Owner: The engineering team
+Due: Next Friday
+
+## Blockquote
+
+> This is a blockquote that spans multiple lines.
+> It is rendered using the Intense Quote style in Word.
+
+## Code block
+
+```
+# This is a fenced code block.
+def hello():
+    print("rendered in monospace")
+```
+
+## Table
+
+| Phase | Duration | Owner |
+|---|---|---|
+| Discovery | 2 weeks | Lead |
+| Build | 4 weeks | Team |
+| Handoff | 2 weeks | **PM** |
+
+## Divider
+
+Everything below the divider is still part of the doc; the divider itself is dropped.
+
+====
+
+## End
+
+That's all. Run `to_docx.py examples/sample.txt` to see the rendered output.

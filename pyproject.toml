@@ -1,0 +1,26 @@
+[project]
+name = "md-to-docx"
+version = "0.1.0"
+description = "Convert plain-text / light-markdown drafts into nicely-formatted Word .docx files"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Ruslan Dautkhanov" }]
+requires-python = ">=3.9"
+dependencies = ["python-docx>=1.0.0"]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[project.scripts]
+md-to-docx = "to_docx:main"
+
+[project.urls]
+Homepage = "https://github.com/Tagar/md-to-docx"
+Repository = "https://github.com/Tagar/md-to-docx"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["to_docx"]
