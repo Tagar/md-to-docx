@@ -18,6 +18,7 @@ Markdown features supported:
     - `- ` or `* ` (indent = sub-bullet)                       bullet
     - `> quoted text`                                          blockquote (multi-line ok)
     - ` ``` ` fenced code block                                monospace paragraph
+    - ` ```mermaid ` fenced block                              rendered via `mmdc` (if installed), else code
     - Pipe tables (`| a | b |` + separator row)                docx table
     - `![alt](path "width=6in")` on its own line               embedded image + italic caption
     - Divider lines (`====` / `----`)                          dropped
@@ -38,7 +39,10 @@ from __future__ import annotations
 
 import argparse
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from docx import Document
@@ -185,6 +189,14 @@ def is_code_fence(line: str) -> bool:
     return line.strip().startswith("```")
 
 
+MERMAID_FENCE_RE = re.compile(r"^\s*```\s*mermaid\b", re.IGNORECASE)
+
+
+def is_mermaid_fence(line: str) -> bool:
+    """True if this is an opening fence for a Mermaid diagram (```mermaid)."""
+    return bool(MERMAID_FENCE_RE.match(line))
+
+
 def is_table_row(line: str) -> bool:
     return line.lstrip().startswith("|") and line.rstrip().endswith("|")
 
@@ -295,6 +307,59 @@ def _add_subtitle(doc, text: str) -> None:
     add_inline_runs(p, text)
 
 
+def _render_mermaid_to_png(mermaid_source: str, temp_dir: Path):
+    """Render Mermaid source to PNG via the `mmdc` CLI.
+
+    Returns the PNG path, or None if mmdc is not installed or rendering fails.
+    """
+    mmdc = shutil.which("mmdc")
+    if not mmdc:
+        return None
+
+    in_path = temp_dir / "diagram.mmd"
+    out_path = temp_dir / "diagram.png"
+    in_path.write_text(mermaid_source)
+
+    try:
+        subprocess.run(
+            [mmdc, "-i", str(in_path), "-o", str(out_path), "-b", "transparent"],
+            check=True,
+            capture_output=True,
+            timeout=60,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+
+    return out_path if out_path.exists() else None
+
+
+def _add_mermaid(doc, mermaid_source: str) -> None:
+    """Render a ```mermaid block to an embedded image, or fall back to a code block.
+
+    If mmdc is unavailable or fails, prepends an italic note so readers know
+    the source was meant to be a diagram and inserts the source as a normal
+    code block — preserving information rather than dropping it.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        png_path = _render_mermaid_to_png(mermaid_source, Path(td))
+        if png_path is None:
+            note = doc.add_paragraph()
+            run = note.add_run(
+                "[Mermaid diagram — install @mermaid-js/mermaid-cli (`mmdc`) to render inline]"
+            )
+            run.italic = True
+            run.font.size = Pt(9)
+            _add_code_block(doc, mermaid_source)
+            return
+
+        try:
+            doc.add_picture(str(png_path), width=Inches(6))
+        except Exception as e:
+            err = doc.add_paragraph()
+            err.add_run(f"[mermaid render error: {e}]").italic = True
+            _add_code_block(doc, mermaid_source)
+
+
 def _add_image(doc, path_str: str, base_dir: Path, alt: str, title) -> None:
     """Insert a block-level image. Path is resolved relative to base_dir if not absolute.
 
@@ -365,14 +430,19 @@ def convert(src: Path, dst: Path, title: str) -> None:
             i += 1
             continue
 
-        # Fenced code block
+        # Fenced code block (including ```mermaid → rendered diagram)
         if is_code_fence(line):
+            is_mermaid = is_mermaid_fence(line)
             i += 1
             buf: list[str] = []
             while i < len(lines) and not is_code_fence(lines[i]):
                 buf.append(lines[i])
                 i += 1
-            _add_code_block(doc, "\n".join(buf))
+            body = "\n".join(buf)
+            if is_mermaid:
+                _add_mermaid(doc, body)
+            else:
+                _add_code_block(doc, body)
             if i < len(lines):
                 i += 1  # skip closing fence
             continue

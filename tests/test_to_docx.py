@@ -194,6 +194,20 @@ class TestClassifiers:
     def test_parse_image_block_empty_alt(self):
         assert to_docx.parse_image_block("![](path.png)") == ("", "path.png", None)
 
+    @pytest.mark.parametrize("line,expected", [
+        ("```mermaid", True),
+        ("``` mermaid", True),
+        ("```Mermaid", True),       # case-insensitive
+        ("```mermaid flowchart LR", True),  # extra args after language
+        ("```", False),              # no language
+        ("```python", False),        # different language
+        ("```mermaidx", False),      # not an exact mermaid tag
+        ("  ```mermaid", True),      # indented
+        ("some text ```mermaid", False),  # not at start
+    ])
+    def test_is_mermaid_fence(self, line, expected):
+        assert to_docx.is_mermaid_fence(line) is expected
+
 
 # ============================================================
 # HTML stripping
@@ -297,6 +311,69 @@ class TestIntegration:
         assert len(doc.inline_shapes) == 0
         placeholder = [p for p in doc.paragraphs if "[image not found" in p.text]
         assert len(placeholder) == 1
+
+    def test_mermaid_fallback_without_mmdc(self, tmp_path, monkeypatch):
+        """When mmdc is unavailable, the Mermaid source is preserved as a code block
+        with an italic note, rather than silently dropped."""
+        monkeypatch.setattr(to_docx.shutil, "which", lambda name: None)
+        src = (
+            "```mermaid\n"
+            "flowchart LR\n"
+            "  A --> B\n"
+            "```\n"
+        )
+        doc = _convert_str(src, tmp_path)
+        # No image should be embedded
+        assert len(doc.inline_shapes) == 0
+        # Note paragraph should appear
+        notes = [p for p in doc.paragraphs if "Mermaid diagram" in p.text]
+        assert len(notes) == 1
+        assert any(r.italic for r in notes[0].runs)
+        # Mermaid source should appear as a code block
+        code_paragraphs = [
+            p for p in doc.paragraphs
+            if any(r.font.name == "Consolas" for r in p.runs if r.font.name)
+        ]
+        code_text = "\n".join(p.text for p in code_paragraphs)
+        assert "flowchart LR" in code_text
+        assert "A --> B" in code_text
+
+    def test_mermaid_renders_when_mmdc_present(self, tmp_path, monkeypatch):
+        """Simulate mmdc being present and a successful render, verify image is embedded."""
+        # Fake mmdc binary path
+        monkeypatch.setattr(to_docx.shutil, "which",
+                            lambda name: "/fake/mmdc" if name == "mmdc" else None)
+
+        # Fake subprocess.run that writes a tiny valid PNG to the requested output path
+        def fake_run(cmd, check=True, capture_output=True, timeout=60):
+            # cmd is [mmdc, -i, in_path, -o, out_path, -b, transparent]
+            out_path = Path(cmd[4])
+            png_bytes = (
+                b"\x89PNG\r\n\x1a\n"
+                b"\x00\x00\x00\rIHDR"
+                b"\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
+                b"\x1f\x15\xc4\x89"
+                b"\x00\x00\x00\rIDATx\x9cc\xfc\xcf\xc0P\x0f\x00\x04\x85\x01\x80"
+                b"\x84\xa9\xf9c\x00\x00\x00\x00IEND\xaeB`\x82"
+            )
+            out_path.write_bytes(png_bytes)
+            class Result: pass
+            return Result()
+
+        monkeypatch.setattr(to_docx.subprocess, "run", fake_run)
+
+        src = (
+            "```mermaid\n"
+            "flowchart LR\n"
+            "  A --> B\n"
+            "```\n"
+        )
+        doc = _convert_str(src, tmp_path)
+        # Image should be embedded
+        assert len(doc.inline_shapes) == 1
+        # No fallback note should appear
+        notes = [p for p in doc.paragraphs if "Mermaid diagram" in p.text]
+        assert len(notes) == 0
 
     def test_no_subtitle_when_second_line_is_heading(self, tmp_path):
         """An H2 on line 2 must NOT be consumed as subtitle."""
