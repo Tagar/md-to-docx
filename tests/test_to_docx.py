@@ -170,6 +170,30 @@ class TestClassifiers:
     def test_is_subtitle_candidate(self, line, expected):
         assert to_docx.is_subtitle_candidate(line) is expected
 
+    @pytest.mark.parametrize("line,expected", [
+        ("![alt text](image.png)", True),
+        ("![](image.png)", True),
+        ("![diagram](path/to/img.jpg)", True),
+        ("![alt](img.png \"width=4in\")", True),
+        ("  ![alt](img.png)  ", True),
+        ("text ![alt](img.png) more", False),  # not a full-line image
+        ("[link](url)", False),                 # missing ! prefix
+        ("![alt](http://example.com/x.png)", True),
+        ("not an image", False),
+        ("", False),
+    ])
+    def test_is_image_block(self, line, expected):
+        assert to_docx.is_image_block(line) is expected
+
+    def test_parse_image_block_basic(self):
+        assert to_docx.parse_image_block("![alt text](path.png)") == ("alt text", "path.png", None)
+
+    def test_parse_image_block_with_title(self):
+        assert to_docx.parse_image_block('![alt](path.png "width=4in")') == ("alt", "path.png", "width=4in")
+
+    def test_parse_image_block_empty_alt(self):
+        assert to_docx.parse_image_block("![](path.png)") == ("", "path.png", None)
+
 
 # ============================================================
 # HTML stripping
@@ -241,6 +265,38 @@ class TestIntegration:
         subtitles = [p for p in doc.paragraphs if p.style.name == "Subtitle"]
         assert len(subtitles) == 0
         assert any("full body sentence" in p.text for p in doc.paragraphs)
+
+    def _make_tiny_png(self, path: Path):
+        """Write a minimal valid 1x1 PNG for image-embedding tests."""
+        # 67-byte minimal PNG (1x1, transparent)
+        png_bytes = (
+            b"\x89PNG\r\n\x1a\n"
+            b"\x00\x00\x00\rIHDR"
+            b"\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
+            b"\x1f\x15\xc4\x89"
+            b"\x00\x00\x00\rIDATx\x9cc\xfc\xcf\xc0P\x0f\x00\x04\x85\x01\x80"
+            b"\x84\xa9\xf9c\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+        path.write_bytes(png_bytes)
+
+    def test_image_block_embeds_picture(self, tmp_path):
+        img = tmp_path / "test.png"
+        self._make_tiny_png(img)
+        src = f"![test image]({img})\n"
+        doc = _convert_str(src, tmp_path)
+        # python-docx exposes inline shapes (including images) via .inline_shapes
+        assert len(doc.inline_shapes) == 1
+        # Caption paragraph should carry the alt text in italic
+        caption = [p for p in doc.paragraphs if p.text == "test image"]
+        assert len(caption) == 1
+        assert all(r.italic for r in caption[0].runs)
+
+    def test_image_missing_file_renders_placeholder(self, tmp_path):
+        src = "![oops](missing.png)\n"
+        doc = _convert_str(src, tmp_path)
+        assert len(doc.inline_shapes) == 0
+        placeholder = [p for p in doc.paragraphs if "[image not found" in p.text]
+        assert len(placeholder) == 1
 
     def test_no_subtitle_when_second_line_is_heading(self, tmp_path):
         """An H2 on line 2 must NOT be consumed as subtitle."""

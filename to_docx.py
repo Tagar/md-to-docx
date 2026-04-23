@@ -19,6 +19,7 @@ Markdown features supported:
     - `> quoted text`                                          blockquote (multi-line ok)
     - ` ``` ` fenced code block                                monospace paragraph
     - Pipe tables (`| a | b |` + separator row)                docx table
+    - `![alt](path "width=6in")` on its own line               embedded image + italic caption
     - Divider lines (`====` / `----`)                          dropped
 
     Inline (inside any paragraph/bullet/list/cell/heading):
@@ -43,7 +44,7 @@ from pathlib import Path
 from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Pt, RGBColor
+from docx.shared import Inches, Pt, RGBColor
 
 
 # ----- inline tokenization -----
@@ -193,6 +194,23 @@ def is_table_separator(line: str) -> bool:
     return bool(re.match(r"^\|?[\s\-:|]+\|?$", stripped)) and "-" in stripped and "|" in stripped
 
 
+IMAGE_BLOCK_RE = re.compile(
+    r'^\s*!\[(?P<alt>[^\]]*)\]\((?P<path>[^)\s"]+)(?:\s+"(?P<title>[^"]*)")?\)\s*$'
+)
+
+
+def is_image_block(line: str) -> bool:
+    return bool(IMAGE_BLOCK_RE.match(line))
+
+
+def parse_image_block(line: str):
+    """Return (alt, path, title) or None if not an image block."""
+    m = IMAGE_BLOCK_RE.match(line)
+    if not m:
+        return None
+    return m.group("alt"), m.group("path"), m.group("title")
+
+
 def is_subtitle_candidate(line: str) -> bool:
     """A plain-text line that should render as Word Subtitle style.
 
@@ -277,6 +295,41 @@ def _add_subtitle(doc, text: str) -> None:
     add_inline_runs(p, text)
 
 
+def _add_image(doc, path_str: str, base_dir: Path, alt: str, title) -> None:
+    """Insert a block-level image. Path is resolved relative to base_dir if not absolute.
+
+    Title syntax "width=Xin" overrides the default 6-inch width.
+    Missing files render as an italic placeholder paragraph instead of crashing.
+    """
+    path = Path(path_str)
+    if not path.is_absolute():
+        path = base_dir / path
+
+    width = Inches(6)
+    if title:
+        m = re.search(r"width\s*=\s*([\d.]+)\s*in", title)
+        if m:
+            width = Inches(float(m.group(1)))
+
+    if not path.exists():
+        p = doc.add_paragraph()
+        p.add_run(f"[image not found: {path_str}]").italic = True
+        return
+
+    try:
+        doc.add_picture(str(path), width=width)
+    except Exception as e:
+        p = doc.add_paragraph()
+        p.add_run(f"[image error: {e}]").italic = True
+        return
+
+    if alt:
+        caption = doc.add_paragraph()
+        run = caption.add_run(alt)
+        run.italic = True
+        run.font.size = Pt(9)
+
+
 # ----- main conversion loop -----
 
 def convert(src: Path, dst: Path, title: str) -> None:
@@ -322,6 +375,13 @@ def convert(src: Path, dst: Path, title: str) -> None:
             _add_code_block(doc, "\n".join(buf))
             if i < len(lines):
                 i += 1  # skip closing fence
+            continue
+
+        # Block-level image: ![alt](path "width=Xin")
+        if is_image_block(line):
+            alt, path, img_title = parse_image_block(line)
+            _add_image(doc, path, src.parent, alt, img_title)
+            i += 1
             continue
 
         # Pipe table: first row + separator row pattern
