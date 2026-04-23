@@ -322,7 +322,7 @@ def _render_mermaid_to_png(mermaid_source: str, temp_dir: Path):
 
     try:
         subprocess.run(
-            [mmdc, "-i", str(in_path), "-o", str(out_path), "-b", "transparent"],
+            [mmdc, "-i", str(in_path), "-o", str(out_path), "-b", "white"],
             check=True,
             capture_output=True,
             timeout=60,

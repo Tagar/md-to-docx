@@ -346,7 +346,7 @@ class TestIntegration:
 
         # Fake subprocess.run that writes a tiny valid PNG to the requested output path
         def fake_run(cmd, check=True, capture_output=True, timeout=60):
-            # cmd is [mmdc, -i, in_path, -o, out_path, -b, transparent]
+            # cmd is [mmdc, -i, in_path, -o, out_path, -b, white]
             out_path = Path(cmd[4])
             png_bytes = (
                 b"\x89PNG\r\n\x1a\n"
