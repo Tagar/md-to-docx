@@ -659,3 +659,33 @@ class TestParagraphCoalescing:
             p.style.name.startswith("Heading") and "heading" in p.text.lower()
             for p in doc.paragraphs
         )
+
+
+class TestNestedInline:
+    """Inline formatting nests — a link inside bold, code inside italic, etc."""
+
+    def _para_hyperlinks(self, para):
+        return para._p.xml.count("</w:hyperlink>")
+
+    def test_bold_wrapped_link_renders_as_hyperlink(self, tmp_path):
+        """``**[text](url)**`` must render a real hyperlink, not literal
+        markdown. Regression: the bold branch used to emit its inner content
+        as raw text, so a link inside bold leaked as ``[text](url)``."""
+        doc = _convert_str("Title\n\n## S\n**[#2698](https://example.com/2698)** matters\n", tmp_path, title="Title")
+        para = next(p for p in doc.paragraphs if "matters" in p.text)
+        assert self._para_hyperlinks(para) == 1
+        assert "](http" not in para.text  # no leaked markdown
+        assert "#2698" in para.text
+
+    def test_link_inside_bold_keeps_bold(self, tmp_path):
+        """The link's visible text keeps the surrounding bold emphasis."""
+        doc = _convert_str("Title\n\n## S\n**[label](https://example.com)**\n", tmp_path, title="Title")
+        para = next(p for p in doc.paragraphs if "label" in p.text)
+        assert "<w:b/>" in para._p.xml or "<w:b " in para._p.xml
+
+    def test_code_inside_bold_renders_monospace(self, tmp_path):
+        """Inline code nested in bold renders monospace and stays bold."""
+        doc = _convert_str("Title\n\n## S\nprefix **bold `code` here** suffix\n", tmp_path, title="Title")
+        para = next(p for p in doc.paragraphs if "prefix" in p.text)
+        assert "**" not in para.text  # bold markers consumed
+        assert any((r.font.name or "") == "Consolas" for r in para.runs)
