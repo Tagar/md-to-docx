@@ -71,8 +71,12 @@ def strip_html(text: str) -> str:
     return HTML_TAG_RE.sub("", text)
 
 
-def _add_hyperlink(paragraph, url: str, text: str):
-    """Attach a clickable hyperlink run to `paragraph`."""
+def _add_hyperlink(paragraph, url: str, text: str, emphasis: dict | None = None):
+    """Attach a clickable hyperlink run to `paragraph`.
+
+    `emphasis` (optional bold/italic flags) styles the link's visible text so a
+    link nested inside bold/italic keeps that emphasis.
+    """
     part = paragraph.part
     r_id = part.relate_to(
         url,
@@ -90,6 +94,13 @@ def _add_hyperlink(paragraph, url: str, text: str):
     underline = OxmlElement("w:u")
     underline.set(qn("w:val"), "single")
     rPr.append(underline)
+    emphasis = emphasis or {}
+    if emphasis.get("bold"):
+        rPr.append(OxmlElement("w:b"))
+    if emphasis.get("italic"):
+        rPr.append(OxmlElement("w:i"))
+    if emphasis.get("strike"):
+        rPr.append(OxmlElement("w:strike"))
     new_run.append(rPr)
     t = OxmlElement("w:t")
     t.text = text
@@ -105,36 +116,56 @@ def _style_code_run(run) -> None:
     run.font.color.rgb = RGBColor(0xC7, 0x25, 0x4E)  # dusty-rose code color
 
 
-def add_inline_runs(paragraph, text: str) -> None:
-    """Add `text` to `paragraph`, parsing markdown inline tokens into styled runs."""
+def add_inline_runs(paragraph, text: str, _emphasis: dict | None = None) -> None:
+    """Add `text` to `paragraph`, parsing markdown inline tokens into styled runs.
+
+    `_emphasis` carries bold/italic/strike state down through recursion so that
+    nested formatting works — e.g. a link inside bold (``**[x](url)**``) or bold
+    inside italic. Callers pass nothing; the parser recurses with it internally.
+    """
     if not text:
         return
     text = strip_html(text)
+    emph = _emphasis or {}
+
+    def _styled(run):
+        # Apply any inherited emphasis to a freshly-added run.
+        if emph.get("bold"):
+            run.bold = True
+        if emph.get("italic"):
+            run.italic = True
+        if emph.get("strike"):
+            run.font.strike = True
+        return run
+
     pos = 0
     for m in INLINE_RE.finditer(text):
         if m.start() > pos:
-            paragraph.add_run(text[pos:m.start()])
+            _styled(paragraph.add_run(text[pos : m.start()]))
 
         if m.group("bold_ast") is not None:
-            paragraph.add_run(m.group("bold_ast")).bold = True
+            add_inline_runs(paragraph, m.group("bold_ast"), {**emph, "bold": True})
         elif m.group("bold_und") is not None:
-            paragraph.add_run(m.group("bold_und")).bold = True
+            add_inline_runs(paragraph, m.group("bold_und"), {**emph, "bold": True})
         elif m.group("italic_ast") is not None:
-            paragraph.add_run(m.group("italic_ast")).italic = True
+            add_inline_runs(paragraph, m.group("italic_ast"), {**emph, "italic": True})
         elif m.group("italic_und") is not None:
-            paragraph.add_run(m.group("italic_und")).italic = True
-        elif m.group("code") is not None:
-            run = paragraph.add_run(m.group("code"))
-            _style_code_run(run)
+            add_inline_runs(paragraph, m.group("italic_und"), {**emph, "italic": True})
         elif m.group("strike") is not None:
-            run = paragraph.add_run(m.group("strike"))
-            run.font.strike = True
+            add_inline_runs(paragraph, m.group("strike"), {**emph, "strike": True})
+        elif m.group("code") is not None:
+            # Inline code is terminal — no markdown is parsed inside backticks —
+            # but it still inherits surrounding bold/italic emphasis.
+            run = _styled(paragraph.add_run(m.group("code")))
+            _style_code_run(run)
         elif m.group("link_text") is not None:
-            _add_hyperlink(paragraph, m.group("link_url"), m.group("link_text"))
+            # A hyperlink can carry inherited emphasis on its visible text; the
+            # link text itself is treated as plain (no further nesting).
+            _add_hyperlink(paragraph, m.group("link_url"), m.group("link_text"), emph)
         pos = m.end()
 
     if pos < len(text):
-        paragraph.add_run(text[pos:])
+        _styled(paragraph.add_run(text[pos:]))
 
 
 # ----- block-level classifiers -----
