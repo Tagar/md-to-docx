@@ -598,3 +598,64 @@ class TestRegressions:
         # 3 list items, zero sub-headings (the title uses "Title" style, not "Heading N")
         assert len(list_items) == 3
         assert len(headings) == 0
+
+
+class TestParagraphCoalescing:
+    """Soft-wrapped prose (single newlines) merges into one paragraph."""
+
+    def test_soft_wrapped_lines_become_one_paragraph(self, tmp_path):
+        """Lines wrapped at ~40 cols with no blank line → one paragraph,
+        joined with single spaces. A leading blank + a subtitle line keep the
+        subtitle detector from claiming the first prose line."""
+        src = (
+            "Title\n\n## Section\n"
+            "The quick brown fox jumps over the lazy dog,\n"
+            "and then it keeps running down the road,\n"
+            "all the way to the river.\n"
+        )
+        doc = _convert_str(src, tmp_path, title="Title")
+        body = [
+            p
+            for p in doc.paragraphs
+            if p.text.strip()
+            and not p.style.name.startswith(("Heading", "Title"))
+            and "List" not in p.style.name
+        ]
+        assert len(body) == 1
+        assert body[0].text == (
+            "The quick brown fox jumps over the lazy dog, and then it keeps "
+            "running down the road, all the way to the river."
+        )
+
+    def test_blank_line_separates_paragraphs(self, tmp_path):
+        """A blank line still starts a new paragraph — coalescing stops at it."""
+        src = "Title\n\nFirst paragraph here.\n\nSecond paragraph here.\n"
+        doc = _convert_str(src, tmp_path, title="Title")
+        body = [
+            p
+            for p in doc.paragraphs
+            if p.text.strip() and not p.style.name.startswith(("Heading", "Title"))
+        ]
+        assert [p.text for p in body] == ["First paragraph here.", "Second paragraph here."]
+
+    def test_coalescing_stops_at_next_block(self, tmp_path):
+        """A prose paragraph does not swallow a following bullet or heading."""
+        src = (
+            "Title\n\n## Section\n"
+            "Some intro prose that wraps across a couple of lines,\n"
+            "continuing here without a blank line between them.\n"
+            "- a bullet item\n"
+            "## A heading\n"
+        )
+        doc = _convert_str(src, tmp_path, title="Title")
+        prose = [p for p in doc.paragraphs if p.text.startswith("Some intro prose")]
+        assert len(prose) == 1
+        assert prose[0].text == (
+            "Some intro prose that wraps across a couple of lines, "
+            "continuing here without a blank line between them."
+        )
+        assert any(p.style.name == "List Bullet" and "bullet item" in p.text for p in doc.paragraphs)
+        assert any(
+            p.style.name.startswith("Heading") and "heading" in p.text.lower()
+            for p in doc.paragraphs
+        )

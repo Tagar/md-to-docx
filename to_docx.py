@@ -397,10 +397,43 @@ def _add_image(doc, path_str: str, base_dir: Path, alt: str, title) -> None:
 
 # ----- main conversion loop -----
 
+def _starts_new_block(line: str) -> bool:
+    """Return True if `line` opens a block that must not be merged into a
+    running text paragraph.
+
+    Used to coalesce soft-wrapped prose: a plain-text paragraph greedily
+    absorbs following lines until a blank line, a divider, or the start of
+    any other block (heading, list, table, blockquote, code fence, image,
+    or `Label:` line). Mirrors standard markdown, where a single newline is
+    a soft wrap and only a blank line ends a paragraph.
+    """
+    if not line.strip() or is_divider(line):
+        return True
+    return bool(
+        is_markdown_heading(line)
+        or is_all_caps_heading(line)
+        or is_numbered_heading(line)
+        or is_numbered_list_item(line)
+        or is_bullet(line)
+        or is_blockquote(line)
+        or is_code_fence(line)
+        or is_image_block(line)
+        or is_table_row(line)
+        or is_kv_label(line)
+    )
+
+
 def convert(src: Path, dst: Path, title: str) -> None:
     doc = Document()
-    doc.styles["Normal"].font.name = "Calibri"
-    doc.styles["Normal"].font.size = Pt(11)
+    normal = doc.styles["Normal"]
+    normal.font.name = "Calibri"
+    # Slightly larger body text and tighter leading than python-docx's
+    # roomy defaults, so soft-wrapped prose reads as full-width paragraphs
+    # rather than a tall, sparse column.
+    normal.font.size = Pt(11.5)
+    normal.paragraph_format.line_spacing = 1.08
+    normal.paragraph_format.space_after = Pt(6)
+    normal.paragraph_format.space_before = Pt(0)
     doc.add_heading(title, level=0)
 
     lines = src.read_text().splitlines()
@@ -529,10 +562,18 @@ def convert(src: Path, dst: Path, title: str) -> None:
             i += 1
             continue
 
-        # Default paragraph
-        p = doc.add_paragraph()
-        add_inline_runs(p, line)
+        # Default paragraph — coalesce soft-wrapped continuation lines
+        # (single newlines) into one paragraph, joining with a space, until
+        # a blank line or the start of another block. Without this, prose
+        # wrapped at ~80 columns renders one Word paragraph per source line,
+        # producing a tall, sparse document.
+        para_lines = [line.strip()]
         i += 1
+        while i < len(lines) and not _starts_new_block(lines[i]):
+            para_lines.append(lines[i].strip())
+            i += 1
+        p = doc.add_paragraph()
+        add_inline_runs(p, " ".join(para_lines))
 
     dst.parent.mkdir(parents=True, exist_ok=True)
     doc.save(dst)
